@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>GlianaAI</title>
+    <link rel="stylesheet" href="./style.css" />
+    <script src="./app.js" type="module"></script>
+  </head>
+  <body>
+    <header class="top">
+      <h1>GlianaAI</h1>
+      <button type="button" id="key-btn" class="ghost">API key</button>
+    </header>
+
+    <section id="key-card" class="card" hidden>
+      <h2><label for="key">Your GlianaAI key</label></h2>
+      <p class="muted">Every run is paid from your own GlianaAI balance. Get a key and top up at
+        <a href="https://dashboard.glianalabs.com" target="_blank" rel="noopener">dashboard.glianalabs.com</a> (rupiah with QRIS, or USDC).</p>
+      <div class="row">
+        <input id="key" type="password" placeholder="gk_…" autocomplete="off" spellcheck="false" aria-describedby="key-hint" />
+        <button type="button" id="key-save" class="primary">Save</button>
+      </div>
+      <p id="key-hint" class="status" role="status">Kept in your Anna storage for this app only. Keys have a $5 daily spending cap by default.</p>
+    </section>
+
+    <section class="card">
+      <h2><label for="ask">What do you want to make?</label></h2>
+      <textarea id="ask" rows="3" placeholder="A 5-second video of a lighthouse at dusk · an Indonesian voice-over of this text · a lo-fi track for 30 seconds · today's weather warning for Jakarta"></textarea>
+      <div class="row">
+        <label class="file"><input type="file" id="attach" accept="image/*" /><span id="attach-label">Attach image</span></label>
+        <button type="button" id="plan" class="primary">Plan it</button>
+      </div>
+      <p id="status" class="status" role="status"></p>
+    </section>
+
+    <section id="plan-card" class="card" hidden>
+      <h2>The plan</h2>
+      <div class="plan-head">
+        <div>
+          <p class="pick" id="p-name"></p>
+          <p class="muted" id="p-kind"></p>
+        </div>
+        <div class="right">
+          <p class="price" id="p-price"></p>
+          <p class="muted" id="p-balance"></p>
+        </div>
+      </div>
+      <p id="p-why"></p>
+      <dl id="p-input" class="inputs"></dl>
+      <div class="row">
+        <button type="button" id="run" class="primary">Run</button>
+        <button type="button" id="replan" class="ghost">Try another option</button>
+      </div>
+    </section>
+
+    <section id="result-card" class="card" hidden>
+      <h2>Result</h2>
+      <div id="r-media" class="media"></div>
+      <pre id="r-text" hidden></pre>
+      <p class="muted" id="r-cost"></p>
+    </section>
+
+    <section class="card" id="history-card" hidden>
+      <h2>Recent</h2>
+      <ul id="history"></ul>
+      <p class="muted">Files are kept for 7 days. Download what you want to keep.</p>
+    </section>
+
+    <footer class="foot">Planning runs on your Anna credits; the run itself on your GlianaAI balance (api.glianalabs.com). 170+ models and tools, pay per call.</footer>
+  </body>
+</html>

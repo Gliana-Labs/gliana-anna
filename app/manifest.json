@@ -1,0 +1,31 @@
+{
+  "schema": 4,
+  "required_executas": [],
+  "tags": ["glianaai", "image", "video", "voice", "music", "tools", "byok"],
+  "system_prompt_addendum": "GlianaAI makes images, videos, voice-overs and music, and runs utility tools (web search, scraping, screenshots, market and filings data, Indonesian data), choosing one of 170+ models and tools and quoting the price before it runs on the user's own GlianaAI key. When the user asks for one of these, open the app's main view with payload {\"ask\": \"<what they want>\"}.",
+  "ui": {
+    "bundle": {
+      "format": "static-spa",
+      "entry": "index.html",
+      "external_origins": ["https://api.glianalabs.com"]
+    },
+    "views": [
+      {
+        "name": "main",
+        "title": "GlianaAI",
+        "default": true,
+        "default_size": { "w": 620, "h": 820 },
+        "min_size": { "w": 360, "h": 520 }
+      }
+    ],
+    "csp_overrides": {
+      "media-src": ["https://api.glianalabs.com"]
+    },
+    "state_merge": "last_writer_wins"
+  },
+  "dev": {
+    "fixtures": [],
+    "seed_storage": {},
+    "user_id": 1
+  }
+}
