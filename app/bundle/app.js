@@ -1,10 +1,12 @@
-// GlianaAI on Anna: describe what you want; Anna's LLM (the user's Anna credits) picks one GlianaAI model or tool from the
-// live catalog and writes its input; the app shows the exact price from /v1/price; the run is paid from the user's own
-// GlianaAI balance with their gk_ key (BYOK).
+// GlianaAI on Anna. Describe what you want; Anna's LLM (the user's Anna credits) picks ONE option and writes its input:
+//   - anna:  Anna's own image / video / voice / music (host APIs, the user's Anna credits, no GlianaAI key);
+//   - model: one of 170+ GlianaAI models (POST /v1/infer on the user's own gk_ key, BYOK);
+//   - tool:  a GlianaAI tool (free ones need no key; paid ones run on the gk_ key).
+// The plan says how it is paid and what it costs before anything runs.
 import { AnnaAppRuntime } from '/static/anna-apps/_sdk/latest/index.js';
 import {
-  API, MODEL_KINDS, PICK_PROMPT, INPUT_PROMPT, offeredModels, offeredTools, catalogText, extractJson, checkPick, cleanInput,
-  attachImage, priceQuery, requestFor, mediaIn, fmtUsd, looksLikeKey,
+  API, MODEL_KINDS, PICK_PROMPT, INPUT_PROMPT, ANNA_SCHEMAS, offeredModels, offeredTools, catalogText, extractJson, checkPick,
+  cleanInput, attachImage, priceQuery, requestFor, mediaIn, fmtUsd, looksLikeKey, annaArgs,
 } from './logic.js';
 
 const $ = (id) => document.getElementById(id);
@@ -12,9 +14,9 @@ const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&
 
 let anna = null;
 let key = null;
-let catalog = null; // { models, tools, text }
+let catalog = null; // { models, tools }
 let attached = null; // data: URL
-let plan = null; // { kind, item, input, why, quoteMicro }
+let plan = null; // { kind, item, input, shown, why, quoteMicro }
 let tried = [];
 let history = [];
 
@@ -31,7 +33,7 @@ async function getJson(url, init) {
   return { ok: r.ok, status: r.status, json: j, headers: r.headers };
 }
 
-// ── Key ──────────────────────────────────────────────────────────────────
+// ── Key (optional) ───────────────────────────────────────────────────────
 async function balance() {
   if (!key) return null;
   const r = await getJson(`${API}/v1/keys/balance`, { headers: { authorization: `Bearer ${key}` } }).catch(() => null);
@@ -48,25 +50,23 @@ async function saveKey() {
   }
   await store('key', v);
   $('key').value = '';
-  say($('key-hint'), `Saved. Balance ${fmtUsd(b.balance_micro_usd)}.`);
+  say($('key-hint'), `Saved. GlianaAI balance ${fmtUsd(b.balance_micro_usd)}.`);
   renderKeyButton(b);
 }
 function renderKeyButton(b) {
-  $('key-btn').textContent = key ? `Balance ${b ? fmtUsd(b.balance_micro_usd) : '…'}` : 'Add API key';
+  $('key-btn').textContent = key ? `GlianaAI ${b ? fmtUsd(b.balance_micro_usd) : '…'}` : 'Add GlianaAI key';
 }
 
 // ── Catalog ──────────────────────────────────────────────────────────────
 async function loadCatalog() {
   if (catalog) return catalog;
   const [m, t] = await Promise.all([getJson(`${API}/v1/models`), getJson(`${API}/v1/tools`)]);
-  if (!m.ok || !t.ok) throw new Error('GlianaAI catalog unavailable, try again in a moment');
-  const models = offeredModels(m.json.models ?? m.json.data);
-  const tools = offeredTools(t.json.tools ?? t.json);
-  catalog = { models, tools, text: catalogText(models, tools) };
+  if (!m.ok || !t.ok) throw new Error('GlianaAI catalogue unavailable, try again in a moment');
+  catalog = { models: offeredModels(m.json.models ?? m.json.data), tools: offeredTools(t.json.tools ?? t.json) };
   return catalog;
 }
 
-// ── Plan: pick, then input, then quote ───────────────────────────────────
+// ── Plan: pick, input, quote ─────────────────────────────────────────────
 async function llm(systemPrompt, content, maxTokens) {
   if (!anna) throw new Error('Open this app inside Anna to plan with AI');
   const r = await anna.llm.complete({ systemPrompt, messages: [{ role: 'user', content }], maxTokens, temperature: 0, thinking: false });
@@ -75,12 +75,18 @@ async function llm(systemPrompt, content, maxTokens) {
 
 async function makePlan(ask) {
   const cat = await loadCatalog();
+  const hasKey = !!key;
   const avoid = tried.length ? `\nDo NOT pick: ${tried.join(', ')}.` : '';
-  const pick = checkPick(await llm(PICK_PROMPT, `OPTIONS:\n${cat.text}\n\nREQUEST: ${ask}${attached ? '\n(The user attached an image.)' : ''}${avoid}`, 300), cat.models, cat.tools);
+  const note = attached ? '\n(The user attached an image.)' : '';
+  const pick = checkPick(await llm(PICK_PROMPT, `OPTIONS:\n${catalogText(cat.models, cat.tools, hasKey)}\n\nREQUEST: ${ask}${note}${avoid}`, 300), cat.models, cat.tools, hasKey);
   if (!pick.ok) throw new Error(pick.why);
-  let schemaText;
+
   let schema = null;
-  if (pick.kind === 'model') {
+  let schemaText;
+  if (pick.kind === 'anna') {
+    schema = ANNA_SCHEMAS[pick.item.id];
+    schemaText = `SCHEMA for Anna ${pick.item.id}:\n${JSON.stringify(schema)}`;
+  } else if (pick.kind === 'model') {
     const s = await getJson(`${API}/v1/schema?model=${encodeURIComponent(pick.item.id)}`);
     if (!s.ok) throw new Error('Could not read that model’s inputs');
     schema = { required: s.json.required ?? [], props: s.json.props ?? {} };
@@ -88,92 +94,130 @@ async function makePlan(ask) {
   } else {
     schemaText = `TOOL ${pick.item.name} (${pick.item.method} ${pick.item.path}):\n${pick.item.guidance ?? ''}\nEXAMPLE INPUT: ${JSON.stringify(pick.item.example ?? {})}`;
   }
-  const raw = await llm(INPUT_PROMPT, `${schemaText}\n\nREQUEST: ${ask}${attached ? '\n(The user attached an image.)' : ''}`, 1200);
+  const raw = await llm(INPUT_PROMPT, `${schemaText}\n\nREQUEST: ${ask}${note}`, 1200);
+
   let input = raw;
-  if (schema) {
+  if (pick.kind === 'anna') {
+    const a = annaArgs(pick.item.id, raw);
+    if (a.missing.length) throw new Error(`The plan is missing ${a.missing.join(', ')}. Say a bit more about what you want.`);
+    input = a.args;
+  } else if (schema) {
     const c = cleanInput(raw, schema);
     if (c.missing.length) throw new Error(`The plan is missing ${c.missing.join(', ')}. Say a bit more about what you want.`);
     input = c.input;
   }
   const shown = { ...input };
-  input = attachImage(input, attached);
+  if (pick.kind !== 'anna') input = attachImage(input, attached);
+
   let quoteMicro = null;
   if (pick.kind === 'model') {
     const q = await getJson(`${API}/v1/price?${priceQuery(pick.item.id, input)}`);
     quoteMicro = q.ok ? (q.json.costMicroUsd ?? null) : null;
-  } else {
+  } else if (pick.kind === 'tool') {
     quoteMicro = pick.item.priceMicroUsd ?? null;
   }
   return { kind: pick.kind, item: pick.item, input, shown, why: pick.why, quoteMicro };
 }
 
-async function renderPlan() {
-  const name = plan.kind === 'model' ? plan.item.id : plan.item.name;
-  $('p-name').textContent = name;
-  $('p-kind').textContent = plan.kind === 'model' ? `${MODEL_KINDS[plan.item.category]} model · ${plan.item.provider ?? ''}` : `tool · ${plan.item.category}`;
-  $('p-price').textContent = plan.quoteMicro == null ? 'price on run' : plan.quoteMicro === 0 ? 'free' : `up to ${fmtUsd(plan.quoteMicro)}`;
+const planName = (p) => (p.kind === 'anna' ? `Anna ${p.item.id}` : p.kind === 'model' ? p.item.id : p.item.name);
+const planKind = (p) => (p.kind === 'anna' ? p.item.id : p.kind === 'model' ? MODEL_KINDS[p.item.category] : 'tool');
+const payOf = (p) => (p.kind === 'anna' ? 'anna' : p.kind === 'tool' && p.quoteMicro === 0 ? 'free' : 'gliana');
+
+function renderPlan() {
+  $('p-name').textContent = planName(plan);
+  $('p-kind').textContent = plan.kind === 'anna' ? `${plan.item.id} · built into Anna` : plan.kind === 'model' ? `${planKind(plan)} model · ${plan.item.provider ?? 'GlianaAI'}` : `tool · ${plan.item.category}`;
+  const pay = payOf(plan);
+  const badge = $('p-pay');
+  badge.className = `badge ${pay}`;
+  badge.textContent = pay === 'anna' ? 'Anna credits' : pay === 'free' ? 'Free' : 'GlianaAI balance';
+  $('p-price').textContent = pay === 'anna' ? '' : pay === 'free' ? '$0' : plan.quoteMicro == null ? 'price on run' : `up to ${fmtUsd(plan.quoteMicro)}`;
   $('p-why').textContent = plan.why;
   $('p-input').innerHTML = Object.entries(plan.shown)
     .map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v === '{{ATTACHED_IMAGE}}' ? 'your attached image' : typeof v === 'object' ? JSON.stringify(v) : v)}</dd>`)
     .join('');
-  const b = await balance();
-  $('p-balance').textContent = b ? `balance ${fmtUsd(b.balance_micro_usd)}` : key ? '' : 'add your API key to run';
-  $('run').disabled = !key;
+  const runnable = pay !== 'gliana' || !!key;
+  $('run').disabled = !runnable;
+  $('run').textContent = runnable ? 'Run' : 'Add a GlianaAI key to run';
   $('plan-card').hidden = false;
 }
 
 // ── Run ──────────────────────────────────────────────────────────────────
+async function runAnna(p) {
+  const onProgress = (s) => say($('status'), `${s.state ?? 'working'}${s.progress?.queuePosition != null ? ` · queue ${s.progress.queuePosition}` : ''}…`);
+  const id = p.item.id;
+  if (id === 'image') {
+    const r = await anna.image.generate(p.input, { timeoutMs: 180_000 });
+    return { media: (r.images ?? []).map((i) => ({ url: i.url, kind: 'image' })), cost: r.quota_used };
+  }
+  if (id === 'video') {
+    const j = await anna.video.generateAwait(p.input, { onProgress, timeoutMs: 10 * 60_000 });
+    return { media: [{ url: j.result?.url, kind: 'video' }], cost: j.billedCostCU };
+  }
+  if (id === 'music') {
+    const j = await anna.music.generateAwait(p.input, { onProgress, timeoutMs: 10 * 60_000 });
+    return { media: [{ url: j.result?.url, kind: 'audio' }], cost: j.billedCostCU };
+  }
+  const out = await anna.audio.speak({ text: p.input.text, format: 'mp3', delivery: 'url' });
+  return { media: [{ url: out.url, kind: 'audio' }], cost: out.quotaUsed ?? out.quota_used };
+}
+
+async function runGliana(p) {
+  const { url, init } = requestFor(p, p.quoteMicro === 0 && p.kind === 'tool' ? null : key);
+  const r = await getJson(url, { ...init, signal: AbortSignal.timeout(15 * 60_000) });
+  if (r.status === 402 || r.json?.error === 'insufficient_balance') throw new Error('Not enough GlianaAI balance. Top up at dashboard.glianalabs.com.');
+  if (r.json?.error === 'daily_cap_reached') throw new Error('This key reached its daily spending cap. Raise it on the dashboard or try tomorrow.');
+  if (!r.ok) throw new Error(r.json?.detail || r.json?.error || `HTTP ${r.status}`);
+  const media = mediaIn(r.json, planKind(p));
+  const charged = Number(r.headers.get('x-gliana-charged-micro-usd') ?? r.json?.costMicroUsd ?? NaN);
+  const left = Number(r.headers.get('x-gliana-balance-micro-usd') ?? NaN);
+  return { media, json: media.length ? null : r.json, charged, left };
+}
+
 async function run() {
-  if (!key) return say($('status'), 'Add your GlianaAI key first.', true);
   const btn = $('run');
   btn.disabled = true;
-  const kind = plan.kind === 'model' ? MODEL_KINDS[plan.item.category] : 'tool';
-  say($('status'), kind === 'video' ? 'Running… videos can take a few minutes.' : 'Running…');
+  const k = planKind(plan);
+  say($('status'), k === 'video' ? 'Running… videos can take a few minutes.' : 'Running…');
   try {
-    const { url, init } = requestFor(plan, key);
-    const r = await getJson(url, { ...init, signal: AbortSignal.timeout(15 * 60_000) });
-    if (r.status === 402 || r.json?.error === 'insufficient_balance') throw new Error('Not enough GlianaAI balance. Top up at dashboard.glianalabs.com.');
-    if (r.json?.error === 'daily_cap_reached') throw new Error('This key reached its daily spending cap. Raise it on the dashboard or try tomorrow.');
-    if (!r.ok) throw new Error(r.json?.detail || r.json?.error || `HTTP ${r.status}`);
-    const charged = Number(r.headers.get('x-gliana-charged-micro-usd') ?? r.json?.costMicroUsd ?? NaN);
-    const left = Number(r.headers.get('x-gliana-balance-micro-usd') ?? NaN);
-    const media = mediaIn(r.json, kind);
-    renderResult(media, media.length ? null : r.json, charged, left);
-    const name = plan.kind === 'model' ? plan.item.id : plan.item.name;
-    history = [{ at: Date.now(), name, url: media[0]?.url ?? null, kind: media[0]?.kind ?? 'text', cost: Number.isFinite(charged) ? charged : null }, ...history].slice(0, 20);
+    const out = plan.kind === 'anna' ? await runAnna(plan) : await runGliana(plan);
+    const cost =
+      plan.kind === 'anna'
+        ? `Paid with Anna credits${out.cost != null ? ` (${out.cost})` : ''} · links last about 30 minutes, download to keep`
+        : [Number.isFinite(out.charged) ? `Charged ${fmtUsd(out.charged)}` : '', Number.isFinite(out.left) ? `GlianaAI balance ${fmtUsd(out.left)}` : ''].filter(Boolean).join(' · ');
+    renderResult(out.media.filter((m) => m.url), out.json, cost);
+    history = [{ at: Date.now(), name: planName(plan), url: plan.kind === 'anna' ? null : out.media[0]?.url ?? null, pay: payOf(plan), cost: Number.isFinite(out.charged) ? out.charged : null }, ...history].slice(0, 20);
     await store('history', history);
     renderHistory();
-    anna?.chat?.append_artifact?.({ artifact: { kind: 'app_event', summary: `GlianaAI ${name}${Number.isFinite(charged) ? ` · ${fmtUsd(charged)}` : ''}` } })?.catch?.(() => undefined);
+    anna?.chat?.append_artifact?.({ artifact: { kind: 'app_event', summary: `GlianaAI · ${planName(plan)}` } })?.catch?.(() => undefined);
+    if (out.left != null && Number.isFinite(out.left)) $('key-btn').textContent = `GlianaAI ${fmtUsd(out.left)}`;
     say($('status'), 'Done.');
   } catch (e) {
-    say($('status'), `Run failed: ${e.message}. A failed call is not charged.`, true);
+    const quota = /QUOTA/i.test(String(e?.code ?? e?.message));
+    say($('status'), quota ? 'Your Anna credits ran out; top up in Anna and try again.' : `Run failed: ${e.message}. A failed call is not charged.`, true);
   } finally {
     btn.disabled = false;
   }
 }
 
-function renderResult(media, json, charged, left) {
-  $('r-media').innerHTML = media
-    .map((m) =>
-      m.kind === 'video'
-        ? `<video src="${esc(m.url)}" controls playsinline></video>`
-        : m.kind === 'audio'
-          ? `<audio src="${esc(m.url)}" controls></audio>`
-          : `<img src="${esc(m.url)}" alt="Generated image" />`,
-    )
-    .join('') + media.map((m) => `<a href="${esc(m.url)}" target="_blank" rel="noopener">Open / download</a>`).join(' ');
+function renderResult(media, json, cost) {
+  $('r-media').innerHTML =
+    media
+      .map((m) => (m.kind === 'video' ? `<video src="${esc(m.url)}" controls playsinline></video>` : m.kind === 'audio' ? `<audio src="${esc(m.url)}" controls></audio>` : `<img src="${esc(m.url)}" alt="Generated image" />`))
+      .join('') + media.map((m) => `<a class="dl" href="${esc(m.url)}" target="_blank" rel="noopener">Open / download</a>`).join(' ');
   $('r-text').hidden = !json;
   if (json) $('r-text').textContent = JSON.stringify(json, null, 2);
-  $('r-cost').textContent = [Number.isFinite(charged) ? `Charged ${fmtUsd(charged)}` : '', Number.isFinite(left) ? `balance ${fmtUsd(left)}` : ''].filter(Boolean).join(' · ');
+  $('r-cost').textContent = cost;
   $('result-card').hidden = false;
+  $('result-card').scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
 function renderHistory() {
   $('history-card').hidden = history.length === 0;
   $('history').innerHTML = history
     .map((h) => {
-      const label = `<span>${esc(h.name)} · ${new Date(h.at).toLocaleString()}</span><span>${h.cost != null ? fmtUsd(h.cost) : ''}</span>`;
-      return h.url ? `<li><a href="${esc(h.url)}" target="_blank" rel="noopener">${label}</a></li>` : `<li><a>${label}</a></li>`;
+      const right = h.pay === 'anna' ? 'Anna credits' : h.pay === 'free' ? 'free' : h.cost != null ? fmtUsd(h.cost) : '';
+      const label = `<span>${esc(h.name)} · ${new Date(h.at).toLocaleString()}</span><span>${right}</span>`;
+      return h.url ? `<li><a href="${esc(h.url)}" target="_blank" rel="noopener">${label}</a></li>` : `<li><span class="h">${label}</span></li>`;
     })
     .join('');
 }
@@ -190,13 +234,13 @@ async function main() {
   history = (await load('history')) ?? [];
   renderHistory();
   const b = await balance();
-  if (key && !b) key = null; // revoked or wrong: ask again
+  if (key && !b) key = null; // revoked or wrong
   renderKeyButton(b);
-  if (!key) $('key-card').hidden = false;
   if (anna?.entryPayload?.ask) $('ask').value = String(anna.entryPayload.ask);
 
   $('key-btn').onclick = () => ($('key-card').hidden = !$('key-card').hidden);
   $('key-save').onclick = saveKey;
+  document.querySelectorAll('.ex').forEach((b) => (b.onclick = () => (($('ask').value = b.dataset.ask), $('ask').focus())));
   $('attach').onchange = (e) => {
     const f = e.target.files?.[0];
     if (!f) return;
@@ -210,15 +254,15 @@ async function main() {
   };
   const doPlan = async () => {
     const ask = $('ask').value.trim();
-    if (!ask) return say($('status'), 'Describe what you want first.', true);
+    if (!ask) return say($('status'), 'Describe what you want first, or tap an example.', true);
     $('plan').disabled = true;
     $('replan').disabled = true;
     say($('status'), 'Planning…');
     try {
       plan = await makePlan(ask);
-      tried.push(plan.kind === 'model' ? plan.item.id : plan.item.name);
-      await renderPlan();
-      say($('status'), key ? 'Check the plan and price, then run.' : 'Add your GlianaAI key to run this plan.');
+      tried.push(planName(plan));
+      renderPlan();
+      say($('status'), payOf(plan) === 'gliana' && !key ? 'This one runs on GlianaAI: add a key, or try another option.' : 'Check the plan, then run.');
     } catch (e) {
       const quota = /QUOTA/i.test(String(e?.code ?? e?.message));
       say($('status'), quota ? 'Your Anna credits ran out; top up in Anna and try again.' : `Could not plan: ${e.message}`, true);

@@ -66,3 +66,28 @@ test('finds media in a response', () => {
   assert.ok(looksLikeKey('gk_abcdefghijklmnopqrstu'));
   assert.ok(!looksLikeKey('sk-123'));
 });
+
+import { ANNA_OPTIONS, annaArgs } from '../app/bundle/logic.js';
+
+test('without a key: Anna media and free tools only; paid picks refused', () => {
+  const m = offeredModels(models);
+  const t = [...offeredTools(tools), { name: 'hari-libur', category: 'indonesia', method: 'GET', path: '/v1/tools/hari-libur', priceMicroUsd: 0, payableFromBalance: true }];
+  const txt = catalogText(m, t, false);
+  assert.match(txt, /anna image \| Anna credits/);
+  assert.match(txt, /tool hari-libur \| indonesia \| free/);
+  assert.doesNotMatch(txt, /model z-image-turbo/);
+  assert.doesNotMatch(txt, /tool search/);
+  assert.equal(checkPick({ type: 'anna', id: 'video' }, m, t, false).kind, 'anna');
+  assert.equal(checkPick({ type: 'model', id: 'z-image-turbo' }, m, t, false).ok, false);
+  assert.equal(checkPick({ type: 'tool', id: 'search' }, m, t, false).ok, false);
+  assert.equal(checkPick({ type: 'tool', id: 'hari-libur' }, m, t, false).ok, true);
+  assert.equal(checkPick({ type: 'anna', id: 'hologram' }, m, t, false).ok, false);
+  assert.equal(ANNA_OPTIONS.length, 4);
+});
+
+test('Anna inputs are clamped to cheap, sane values; free tools go without a key', () => {
+  assert.deepEqual(annaArgs('video', { prompt: 'x', durationSec: 60, bogus: 1 }), { args: { prompt: 'x', durationSec: 10 }, missing: [] });
+  assert.deepEqual(annaArgs('voice', {}).missing, ['text']);
+  const r = requestFor({ kind: 'tool', item: { method: 'GET', path: '/v1/tools/hari-libur' }, input: { year: 2026 } }, null);
+  assert.equal(r.init.headers.authorization, undefined);
+});

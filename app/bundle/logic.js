@@ -35,19 +35,44 @@ export function offeredTools(tools) {
 const usd = (micro) => (micro == null ? '?' : `$${(micro / 1e6).toFixed(micro < 10_000 ? 4 : 3)}`);
 
 /** One line per option, short enough that ~200 options fit one planning call. */
-export function catalogText(models, tools) {
-  const m = models.map((x) => `model ${x.id} | ${MODEL_KINDS[x.category]} (${x.category}) | ${x.priceLabel ?? usd(x.unitPriceMicroUsd)}`);
-  const t = tools.map((x) => `tool ${x.name} | ${x.category} | ${usd(x.priceMicroUsd)} | ${String(x.guidance ?? '').replace(/\s+/g, ' ').slice(0, 140)}`);
-  return [...m, ...t].join('\n');
+/**
+ * Anna's own media (v0.1.1, operator 2026-11-26: "show it then"): image, video, voice and music through the Anna host,
+ * paid with the user's Anna credits, so a user gets a result with no GlianaAI key at all. Apps carry no price tag on
+ * Anna; the developer earns Anna's usage revenue share on these credits.
+ */
+export const ANNA_OPTIONS = [
+  { id: 'image', what: "Generate an image with Anna's built-in image models (no GlianaAI key needed)" },
+  { id: 'video', what: "Generate a short video clip (about 5 s) with Anna's built-in video models (no GlianaAI key needed)" },
+  { id: 'voice', what: "Speak a text aloud with Anna's built-in text-to-speech (no GlianaAI key needed)" },
+  { id: 'music', what: "Generate a music track with Anna's built-in music models (no GlianaAI key needed)" },
+];
+
+/** Without a key only Anna's media and the free GlianaAI tools can run, so only those are offered. */
+export function catalogText(models, tools, hasKey = true) {
+  const a = ANNA_OPTIONS.map((x) => `anna ${x.id} | Anna credits | ${x.what}`);
+  const m = hasKey ? models.map((x) => `model ${x.id} | ${MODEL_KINDS[x.category]} (${x.category}) | ${x.priceLabel ?? usd(x.unitPriceMicroUsd)}`) : [];
+  const t = tools
+    .filter((x) => hasKey || x.priceMicroUsd === 0)
+    .map((x) => `tool ${x.name} | ${x.category} | ${x.priceMicroUsd === 0 ? 'free' : usd(x.priceMicroUsd)} | ${String(x.guidance ?? '').replace(/\s+/g, ' ').slice(0, 140)}`);
+  return [...a, ...m, ...t].join('\n');
 }
 
-export const PICK_PROMPT = `You choose ONE GlianaAI model or tool that best does what the user asks. Options are listed one per line as
-"model <id> | <kind> | <price>" or "tool <name> | <category> | <price> | <what it does>".
+export const PICK_PROMPT = `You choose ONE option that best does what the user asks. Options are listed one per line as
+"anna <id> | Anna credits | <what it does>", "model <id> | <kind> | <price>" or "tool <name> | <category> | <price> | <what it does>".
 Rules:
-- Pick only from the list. Prefer the cheapest option that does the job well, unless the user asks for top quality.
-- If the user attached an image and wants it changed or animated, pick an image-to-image or image-to-video model.
+- Pick only from the list. Prefer the cheapest option that does the job well, unless the user asks for a specific model, top quality or a long/high-resolution result.
+- "anna" options run on the user's Anna credits; "model" and "tool" options on their GlianaAI balance ("free" tools cost nothing).
+- If the user attached an image and wants it changed or animated, pick a GlianaAI image-to-image or image-to-video model (anna options cannot take an attached image).
 - If nothing in the list fits, answer {"type":"none","id":"","why":"<one sentence>"}.
-Answer ONLY JSON: {"type":"model"|"tool"|"none","id":"<id or name>","why":"<one short sentence for the user>"}`;
+Answer ONLY JSON: {"type":"anna"|"model"|"tool"|"none","id":"<id or name>","why":"<one short sentence for the user>"}`;
+
+/** The input each Anna option takes (the host APIs' own field names). */
+export const ANNA_SCHEMAS = {
+  image: { required: ['prompt'], props: { prompt: { type: 'string' }, size: { type: 'string', enum: ['1024x1024', '1024x1536', '1536x1024'] } } },
+  video: { required: ['prompt'], props: { prompt: { type: 'string' }, durationSec: { type: 'integer', default: 5 }, aspectRatio: { type: 'string', enum: ['16:9', '9:16', '1:1'] } } },
+  voice: { required: ['text'], props: { text: { type: 'string', description: 'the exact words to speak, in the language the user wants' } } },
+  music: { required: ['prompt'], props: { prompt: { type: 'string' }, instrumental: { type: 'boolean' }, durationSec: { type: 'integer', default: 30 } } },
+};
 
 export const INPUT_PROMPT = `You write the JSON input for ONE GlianaAI call. You get the user's request, the model's input schema (or the
 tool's description and example input). Rules:
@@ -67,8 +92,15 @@ export function extractJson(text) {
 }
 
 /** The pick must name an option we actually offer; anything else is refused, never guessed. */
-export function checkPick(pick, models, tools) {
+export function checkPick(pick, models, tools, hasKey = true) {
   if (!pick || pick.type === 'none') return { ok: false, why: pick?.why || 'Nothing in GlianaAI fits that request.' };
+  if (pick.type === 'anna') {
+    const a = ANNA_OPTIONS.find((x) => x.id === pick.id);
+    return a ? { ok: true, kind: 'anna', item: a, why: String(pick.why ?? '') } : { ok: false, why: `Unknown option ${pick.id}` };
+  }
+  // Without a key only free tools can run; a paid pick is refused rather than run and failed.
+  if (!hasKey && pick.type === 'model') return { ok: false, why: 'That needs a GlianaAI key. Add one, or ask for an image, video, voice or music made with Anna credits.' };
+  if (!hasKey && pick.type === 'tool' && tools.find((x) => x.name === pick.id)?.priceMicroUsd !== 0) return { ok: false, why: 'That tool needs a GlianaAI key.' };
   if (pick.type === 'model') {
     const m = models.find((x) => x.id === pick.id);
     return m ? { ok: true, kind: 'model', item: m, why: String(pick.why ?? '') } : { ok: false, why: `Unknown model ${pick.id}` };
@@ -111,9 +143,9 @@ export function priceQuery(modelId, input) {
   return q.toString();
 }
 
-/** The HTTP request for a plan, on the user's own key. */
+/** The HTTP request for a plan, on the user's own key (a free tool goes without one). */
 export function requestFor(plan, key) {
-  const headers = { authorization: `Bearer ${key}` };
+  const headers = key ? { authorization: `Bearer ${key}` } : {};
   if (plan.kind === 'model') {
     return { url: `${API}/v1/infer`, init: { method: 'POST', headers: { ...headers, 'content-type': 'application/json' }, body: JSON.stringify({ model: plan.item.id, ...plan.input }) } };
   }
@@ -147,3 +179,14 @@ export function mediaIn(json, fallbackKind) {
 
 export const fmtUsd = usd;
 export const looksLikeKey = (k) => /^gk_[A-Za-z0-9_-]{16,}$/.test(String(k ?? '').trim());
+
+/** Clamp an Anna option's input to sane, cheap values before it reaches the host (the host bills Anna credits). */
+export function annaArgs(id, input) {
+  const s = ANNA_SCHEMAS[id];
+  const { input: a, missing } = cleanInput(input, s);
+  if (missing.length) return { missing };
+  if (id === 'video') a.durationSec = Math.min(Math.max(Number(a.durationSec) || 5, 3), 10);
+  if (id === 'music') a.durationSec = Math.min(Math.max(Number(a.durationSec) || 30, 10), 120);
+  if (id === 'voice') a.text = String(a.text).slice(0, 2000);
+  return { args: a, missing: [] };
+}

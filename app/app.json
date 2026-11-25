@@ -1,8 +1,8 @@
 {
   "slug": "glianaai",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "name": "GlianaAI",
-  "tagline": "Say what you want made: GlianaAI picks the right one of 170+ image, video, voice and music models and tools, quotes the price, then runs it.",
-  "description": "GlianaAI is one pay-per-call API for 170+ AI models and tools. This app puts it inside Anna with an AI planner in front.\n\n1. Describe what you want: \"a 5-second video of a lighthouse at dusk\", \"an Indonesian voice-over of this paragraph\", \"30 seconds of lo-fi music\", \"a screenshot of this page\", \"today's weather warnings for Jakarta\". Attach an image to edit or animate it.\n2. Anna's AI picks the best-value model or tool from the live GlianaAI catalogue and writes its settings.\n3. You see the plan and the exact price before anything runs.\n4. Run it: the result (image, video, audio or data) appears in the window, with what it cost and your balance.\n\nRuns are paid from your own GlianaAI balance with your API key (BYOK): top up in rupiah with QRIS or in USDC at dashboard.glianalabs.com, no subscription. Planning uses your Anna credits. A failed call is not charged. Generated files are kept for 7 days.",
+  "tagline": "Say what you want made. AI picks the right image, video, voice, music model or tool, shows how it's paid, then runs it.",
+  "description": "Describe what you want: \"a 5-second video of a lighthouse at dusk\", \"read this aloud\", \"30 seconds of lo-fi music\", \"Indonesian holidays in 2026\". Tap an example to start.\n\nAnna's AI picks the best option and writes its settings, and the plan shows how it will be paid before anything runs:\n- Anna credits: Anna's own image, video, voice and music, nothing else needed.\n- Free: GlianaAI's free tools (Indonesian holidays, BMKG weather and earthquake alerts, regions, prayer times, QRIS, amounts in words).\n- GlianaAI balance: with your own GlianaAI key, 170+ more models and paid tools (web search, scraping, screenshots, market and SEC filings data), with the exact price shown first. Top up in rupiah with QRIS or in USDC at dashboard.glianalabs.com, no subscription.\n\nAttach an image to edit or animate it with a GlianaAI model. A failed GlianaAI call is not charged.",
   "category": "creative"
 }
